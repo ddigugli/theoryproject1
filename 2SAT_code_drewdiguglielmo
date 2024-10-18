@@ -1,0 +1,249 @@
+import sys
+import csv
+import time
+
+lastLine = []
+f = open('outputfile.csv', 'w')
+writer = csv.writer(f)
+
+# read inputted file
+def fileRead(inputfile):
+    # open file
+    file = open(inputfile, 'r')
+    line = file.readline()
+
+    # keep track of cnts
+    wffcnt = 0 # count of wffs
+    scnt = 0 # count of s vars
+    temps = 0 # temp to store count of s in each line
+    ucnt = 0 # count of u vars
+    tempu = 0 # temp to store count of u in each line
+
+    # for each line in file
+    while line:
+        # check if line valid and starts w c
+        if line.strip() and line.split()[0][0] == "c":
+            wffcnt += 1
+            # call wff func to process line and update counts s, u counts
+            line, temps, tempu = wff(line, file)
+            # update counts of s, u vars
+            scnt = scnt + temps 
+            ucnt = ucnt + tempu 
+        # get next line in the file, will break if line dne
+        line = file.readline()
+
+    finalLine(wffcnt, scnt, ucnt)
+    # write last line to a CSV file using writer object 
+    writer.writerow(lastLine)
+
+    # close files to avoid mem errors
+    file.close()
+    f.close()
+    
+# read each wff from input file 
+def wff(line, file):
+    temps = 0
+    tempu = 0
+    count = 0
+
+    # split line
+    split = line.split(',')
+    probnum = split[1] # problem number
+    maxL = split[2] # max literals
+    sat = split[3] # satisfiable answer
+
+    # split next line
+    file_split = file.readline().split(',')
+    numv = file_split[2] # num vars
+    numc = int(file_split[3]) # num clauses
+
+    wff = []
+    totlit = 0
+
+    # iterates through the clauses
+    while True:
+        count += 1
+        # reads line 
+        line = file.readline().strip()
+        # breaks the loop if all clauses have been processed
+        if numc == count:
+            break
+        # split line into literals
+        line = line.split(',')
+        for num in line:
+            totlit += 1 # count total literals
+        # literals --> ints, append clause to wff list
+        line = list(map(int, line))
+        wff.append(line)
+
+    start = time.time() * (10**6) # start exec time
+    values = satisfiability(wff, numv) # check sat of wff, get var assignments
+    end = time.time() * (10**6) # start exec time
+
+    # determine sat, set temps/tempu to T 
+    if values:
+        sat = "S"
+        temps = 1
+    else:
+        sat = "U"
+        tempu = 1
+
+    exect = end-start # exec time
+    output = [probnum, numv, numc, maxL, totlit, sat, 0, exect]
+    # if wff sat, add var assignments to output arr
+    if values:
+        output.extend([x for x in values])
+        
+    writeout(output)
+
+    # return line, s var count, u var count
+    return line, temps, tempu
+
+# checks sat of the wff
+def satisfiability(wff, vars):
+    values = {} # variable assignments
+    dictstack = {1:[0, {}]} # tracks branching points and associated states
+    poss = [(x + 1) for x in range(int(vars))] # list of poss vars
+    stack = [1]
+    val = 1
+
+    while (stack):
+        valsup = {} # updated var assignments
+        original = values.copy() # copy of curr var assignments
+
+        # check state of curr stack, update var assignments
+        if dictstack[val][0] == 0:
+            valsup = propagate(wff, values, val, 0)
+            dictstack[val][0] = 1
+
+        if valsup == {} and dictstack[val][0] == 1:
+            valsup = propagate(wff, values, val, 1)
+            dictstack[val][0] = 2
+
+        # if no new assignments AND curr stack completed search, backtrack to prev branch pt
+        if valsup == {}:
+            while len(stack) > 0 and dictstack[stack[-1]][0] == 2:
+                discard = stack.pop()
+                del dictstack[discard]
+            if len(stack) > 0:
+                val = stack[-1]
+                values = dictstack[val][1].copy()
+            else:
+                return False
+        else:
+            values = valsup # update var assignments
+            # if all vars assigned, check wffs validity
+            if len(values) != int(vars):
+                # find first unassigned var and make new branching pt
+                currposs = poss.copy()
+                for item in dictstack:
+                    currposs.pop(currposs.index(item))
+                dictstack[currposs[0]] = [0, {}]
+                stack.append(currposs[0])
+                dictstack[val][1] = original.copy()
+                val = currposs[0]
+            else:
+                # if all vars assigned, concat var assignments into bin str
+                [input, binval] = concat(values, vars)
+                # check if input satisfies wff, return bin representation if yes
+                if check(input, wff):
+                    return binval
+    return False
+
+# propagate var assignments based on wff
+def propagate(wff, values, curr, assignment):
+    tempvals = values.copy()
+
+    # if curr var not in temp assignments, add it
+    if curr not in tempvals:
+        tempvals[curr] = assignment
+    else:
+        # if curr var is assigned, return existing assignments
+        return tempvals
+
+    # iterate through each clause in wff
+    for clause in wff:
+        index = -1
+        
+        # if curr var is negated in clause AND if its negation exists in assignments
+        if tempvals[curr] == 0 and curr in clause:
+            index = int(not(clause.index(curr)))
+        # if curr var is positive in clause AND if its negation exists in the assignments        
+        elif tempvals[curr] == 1 and -curr in clause:
+            index = int(not(clause.index(-curr)))
+        
+        # if complementary var exists in clause
+        if index != -1:
+            if clause[index] < 0:
+                # if negation of comp. var alr assigned T, return empty dict
+                if -clause[index] in tempvals and tempvals[-clause[index]] != 0:
+                    return {}
+                # else assign neg. of comp. var as F
+                else:
+                    tempvals[-clause[index]] = 0
+            # if comp. var positive
+            elif clause[index] > 0:
+                # if comp. var alr assigned F, return empty dict
+                if clause[index] in tempvals and tempvals[clause[index]] != 1:
+                    return {}
+                # else assign comp. var T                
+                else:
+                    tempvals[clause[index]] = 1
+    # return mod temp assignments
+    return tempvals
+
+
+# check if assignments satisfies all the clauses in wff
+def check(i, wff):
+    for clause in wff: # for each clause
+        truthval = False # start F
+        
+        # for each lit
+        for literal in clause:
+            # if lit - and F, should be true
+            if literal < 0: 
+                if not ((i >> (abs(literal)-1)) & 1):
+                    truthval = True
+                    break
+            # if + and T, should be true
+            if literal > 0:
+                if ((i >> (abs(literal)-1)) & 1):
+                    truthval = True
+                    break
+        # if no lit T, return F, wff not satisfies
+        if not truthval:
+            return False
+    # if all satisfied, return T, wff satisfied w assignment 'i'
+    return True
+
+# write to output file
+def writeout(args):
+    writer.writerow(args)
+
+# outputs final line of data
+def finalLine(wffcnt, scnt, ucnt):
+    inputFile = "2SAT"
+    teamName = "drew"
+    numAnswersProvided = 0
+    numCorrect = "unknown"
+    arr= [inputFile, teamName, wffcnt, scnt, ucnt, numAnswersProvided, numCorrect]
+    lastLine.extend(arr)
+
+# concat vals of vars in reverse and returns list of 
+# int representation of concat bin str
+# the second element is bin str itself in reverse
+def concat(values, vars):
+    input = []
+
+    for i in range(int(vars)):
+        # append bin vals of vars in reverse to input lst
+        input.append(f"{values[int(vars) - i]}")
+    
+    # convert concat bin str to an int and returns the int and bin str
+    return [int("".join(input),2), "".join(input)[::-1]]
+
+def main():
+    fileRead(sys.argv[1]) # reads input
+
+if __name__ == "__main__":
+    main()
